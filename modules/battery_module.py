@@ -1,85 +1,100 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, List
-from modules.kenter_module import *
-from modules.entsoe_module import *
+from typing import Dict
 
 class BatterySavingsCalculator:
-    """Calculator for potential savings using battery storage system."""
+    """
+    Calculator for potential savings using a battery storage system.
     
-    def __init__(self, battery_capacity: float = 100.0, 
-                 enable_solar_arbitrage: bool = True, charge_efficiency: float = 0.95, 
-                 discharge_efficiency: float = 0.95, min_state_of_charge: float = 0.1,
-                 price_threshold_factor: float = 1.05, # Factor to determine if storing solar is profitable
-                 max_cycle_fraction: float = 1.0,    # For large commercial batteries, 1C is more realistic
-                 maximum_charge_rate_kw: float = None):    # Will be automatically calculated based on capacity
+    This class simulates battery behavior to maximize cost savings by:
+    1. Storing excess solar energy instead of feeding it back to the grid
+    2. Discharging stored energy during high-price periods
+    3. Optimizing battery usage based on energy price arbitrage
+    
+    The calculator considers battery constraints like capacity, charge/discharge
+    efficiency, minimum state of charge, and maximum charge/discharge rates.
+    """
+    
+    def __init__(self, 
+                 battery_capacity: float = 100.0, 
+                 enable_solar_arbitrage: bool = True, 
+                 charge_efficiency: float = 1.0, 
+                 discharge_efficiency: float = 1.0, 
+                 min_state_of_charge: float = 0.0,
+                 max_cycle_fraction: float = 0.5,
+                 maximum_charge_rate_kw: float = None):
+        """
+        Initialize the battery savings calculator with battery specifications.
+        
+        Args:
+            battery_capacity: Battery capacity in kWh
+            enable_solar_arbitrage: Whether to enable solar arbitrage optimization
+            charge_efficiency: Energy retained during charging (1.0 = 100%)
+            discharge_efficiency: Energy available during discharge (1.0 = 100%)
+            min_state_of_charge: Minimum battery level as percentage (0.0-1.0)
+            max_cycle_fraction: Max fraction of battery capacity per interval (C-rate)
+            maximum_charge_rate_kw: Max charge rate in kW (calculated from capacity if None)
+        """
         self.battery_capacity = battery_capacity
         self.enable_solar_arbitrage = enable_solar_arbitrage
-        self.charge_efficiency = charge_efficiency  # Energy retained during charging (0.95 = 95%)
-        self.discharge_efficiency = discharge_efficiency  # Energy available during discharge
-        self.min_state_of_charge = min_state_of_charge  # Minimum battery level (percentage)
-        self.price_threshold_factor = price_threshold_factor  # Factor to determine if storing solar is profitable
-        self.max_cycle_fraction = max_cycle_fraction  # Max % of battery capacity per time interval (15min)
+        self.charge_efficiency = charge_efficiency
+        self.discharge_efficiency = discharge_efficiency  
+        self.min_state_of_charge = min_state_of_charge
+        self.max_cycle_fraction = max_cycle_fraction
         
-        # Auto-calculate maximum charge rate based on battery size if not provided
-        # Large commercial batteries typically have more powerful inverters
+        # Calculate maximum charge rate based on battery capacity and C-rate if not provided
         if maximum_charge_rate_kw is None:
-            if battery_capacity < 50:  # Small residential
-                self.maximum_charge_rate_kw = min(10.0, battery_capacity * 0.5)  # 5-10kW typical
-            elif battery_capacity < 100:  # Large residential/small commercial
-                self.maximum_charge_rate_kw = min(50.0, battery_capacity * 0.7)  # Up to 50kW
-            elif battery_capacity < 250:  # Medium commercial
-                self.maximum_charge_rate_kw = min(100.0, battery_capacity * 0.8)  # Up to 100kW
-            else:  # Large commercial/farm
-                self.maximum_charge_rate_kw = min(250.0, battery_capacity * 0.9)  # Up to 250kW
+            self.maximum_charge_rate_kw = self.battery_capacity * self.max_cycle_fraction
         else:
             self.maximum_charge_rate_kw = maximum_charge_rate_kw
         
-        # Efficiency factor combines both charge and discharge efficiency
+        # Combined efficiency for full charge-discharge cycle
         self.combined_efficiency = self.charge_efficiency * self.discharge_efficiency
-        
-        # Store transaction history for debugging/analytics
-        self.transactions = []
-        # Track the source of energy (for tax purposes)
-        self.battery_solar_percentage = 0.0  # Track percentage of battery energy from solar
 
     def arbitrage(self, energy_usage: pd.DataFrame, energy_prices: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         """
-        Calculate potential savings through arbitrage using battery storage.
-
+        Calculate potential savings through battery storage optimization.
+        
+        This method simulates battery operation day by day to maximize savings by:
+        1. Storing excess solar generation instead of feeding it back to the grid
+        2. Discharging stored energy during high-price periods
+        3. Tracking detailed energy flows for analysis
+        
         Args:
             energy_usage: DataFrame with columns [timestamp, type, value]
-                where type is either 'return' or 'supply'
+                where type is either 'return' (solar generation) or 'supply' (consumption)
             energy_prices: DataFrame with columns [timestamp, price]
-
+                
         Returns:
-            Dict with keys:
-                'savings': DataFrame with total potential savings
-                'energy_flows': DataFrame with detailed energy flows by source
+            Dictionary with two keys:
+                'savings': DataFrame with daily savings metrics
+                'energy_flows': DataFrame with detailed energy flows by timestamp
         """
-        # Initialize result DataFrame
+        # Initialize empty result DataFrames
         total_savings = pd.DataFrame({
             'timestamp': pd.Series(dtype='datetime64[ns]'),
             'gross_savings': pd.Series(dtype='float64'),
             'lost_revenue': pd.Series(dtype='float64'),
             'net_savings': pd.Series(dtype='float64'),
-            'grid_arbitrage_savings': pd.Series(dtype='float64')
         })
         
+        # Early return if solar arbitrage is disabled
         if not self.enable_solar_arbitrage:
-            return {'savings': total_savings, 'energy_flows': pd.DataFrame()}
+            return {'savings': None, 'energy_flows': None}
 
-        # Prepare data - do this once upfront
+        # Prepare input data
         energy_usage = energy_usage.copy()
         energy_prices = energy_prices.copy()
+        energy_usage.to_csv("energy.csv")
+        energy_prices.to_csv("pri")
         
-        # Convert timestamps to datetime and add date column efficiently
+        # Convert timestamps to datetime and add date column
         energy_usage['timestamp'] = pd.to_datetime(energy_usage['timestamp'])
         energy_prices['timestamp'] = pd.to_datetime(energy_prices['timestamp'])
         energy_usage['date'] = energy_usage['timestamp'].dt.date
         energy_prices['date'] = energy_prices['timestamp'].dt.date
 
-        # Create a pivot table with both return and supply in one DataFrame
+        # Create a combined DataFrame with generation, consumption and prices
         energy_pivot = pd.pivot_table(
             energy_usage, 
             values='value',
@@ -89,335 +104,363 @@ class BatterySavingsCalculator:
             fill_value=0
         ).reset_index()
         
-        # Ensure both 'return' and 'supply' columns exist
+        # Ensure required columns exist
         if 'return' not in energy_pivot.columns:
             energy_pivot['return'] = 0
         if 'supply' not in energy_pivot.columns:
             energy_pivot['supply'] = 0
             
-        # Add energy prices to the pivot table
+        # Add energy prices
         energy_pivot = pd.merge(
             energy_pivot,
             energy_prices[['timestamp', 'price']],
             on='timestamp',
             how='left'
-        )
+        ).sort_values('timestamp')
         
-        # Sort by timestamp to process chronologically
-        energy_pivot = energy_pivot.sort_values('timestamp')
+        # Define fixed 15-minute interval (0.25 hours)
+        interval_fraction = 0.25
+        max_power_per_interval = self.maximum_charge_rate_kw * interval_fraction
         
-        # Calculate time intervals to determine max power per interval
-        interval_minutes = self._determine_interval_minutes(energy_pivot)
-        
-        # Calculate max power (kW) based on both percentage and absolute limits
-        # Scale by interval - if 15min intervals, we can use 25% of max_cycle_fraction per interval
-        interval_fraction = interval_minutes / 60.0  # Convert to fraction of an hour
-        
-        # 1. Percentage-based limit (as a fraction of total capacity)
-        percentage_limit = self.battery_capacity * self.max_cycle_fraction * interval_fraction
-        
-        # 2. Absolute power limit (scaled for the interval)
-        absolute_limit = self.maximum_charge_rate_kw * interval_fraction
-        
-        # Use the more conservative (lower) of the two limits
-        max_power_per_interval = min(percentage_limit, absolute_limit)
-        
-        # Add informative comment about the charging rate limit
-        charging_rate_explanation = f"Charging limited to {max_power_per_interval:.2f} kWh per {interval_minutes:.0f}-minute interval"
-        charging_rate_explanation += f" ({self.maximum_charge_rate_kw:.1f} kW inverter, {self.max_cycle_fraction:.1f}C battery rate)"
-        
-        # Battery constraints
+        # Initialize battery state
         min_battery_level = self.battery_capacity * self.min_state_of_charge
         max_battery_level = self.battery_capacity
-        current_battery_level = min_battery_level  # Start with minimum battery level
+        current_battery_level = min_battery_level
         
-        # Track battery composition - assume initial charge is from solar
-        solar_energy_in_battery = min_battery_level
+        # Track energy sources in battery (for tax calculations)
+        solar_energy_in_battery = current_battery_level
         grid_energy_in_battery = 0.0
         
-        # Daily metrics
+        # Initialize metrics and energy flows tracking
         daily_metrics = {}
+        energy_flows = []
         
-        # Group data by date for date-based processing
-        date_groups = energy_pivot.groupby('date')
-        
-        # Process each date to generate plans
-        for date, day_data in date_groups:
-            if date not in daily_metrics:
-                daily_metrics[date] = {
+        # Process each day in chronological order
+        all_dates = sorted(energy_pivot['date'].unique())
+        for i in range(len(all_dates)):
+            current_date = all_dates[i]
+            current_day_data = energy_pivot[energy_pivot['date'] == current_date]
+            
+            # Initialize daily metrics
+            if current_date not in daily_metrics:
+                daily_metrics[current_date] = {
                     'gross_savings': 0,
                     'lost_revenue': 0,
-                    'grid_arbitrage_savings': 0,
-                    'charge_rate_info': charging_rate_explanation
+                    'net_savings': 0,
+                    'stored_solar_value': 0,
+                    'solar_energy_used': 0
                 }
+            
+            # Get next day's data for planning if available
+            next_day_data = None
+            if i + 1 < len(all_dates):
+                next_date = all_dates[i + 1]
+                next_day_data = energy_pivot[energy_pivot['date'] == next_date]
                 
-            # Create battery operation plan for this day
-            solar_plan = {}
+                # Initialize next day's metrics
+                if next_date not in daily_metrics:
+                    daily_metrics[next_date] = {
+                        'gross_savings': 0,
+                        'lost_revenue': 0,
+                        'net_savings': 0,
+                        'stored_solar_value': 0,
+                        'solar_energy_used': 0
+                    }
             
-            # Plan for solar arbitrage
-            if self.enable_solar_arbitrage:
-                solar_plan = self._plan_solar_arbitrage(day_data, max_power_per_interval)
+            # Plan battery operations for the day
+            solar_plan = self._plan_solar_arbitrage(
+                current_day_data, 
+                max_power_per_interval,
+                current_battery_level - min_battery_level,  # Available energy
+                next_day_data
+            )
             
-            # Execute the plans with updated battery state tracking
-            for idx, row in day_data.iterrows():
+            # Process each timestamp in chronological order
+            for _, row in current_day_data.iterrows():
                 timestamp = row['timestamp']
                 current_price = row['price']
-                solar_return = row['return']  
+                solar_return = row['return']
                 house_consumption = row['supply']
                 net_energy = solar_return - house_consumption
                 
-                # Initial values
+                # Initialize energy flows for this timestamp
+                solar_to_house = min(solar_return, house_consumption)
+                solar_to_grid = 0
                 solar_to_battery = 0
-                solar_to_grid = 0 
+                grid_to_house = max(0, house_consumption - solar_return)
                 grid_to_battery = 0
                 battery_to_house = 0
-                battery_to_grid = 0
-                grid_to_house = 0
-                
-                # New fields to track energy sources for tax purposes
-                solar_origin_to_house = 0  # Energy from solar (direct or via battery)
-                grid_origin_to_house = 0   # Energy from grid (direct or via battery) 
-                
-                # Debug info
-                charge_limited_by = "none"
-                
-                # Track actions for this timestamp
                 actions = []
                 
-                # Execute solar arbitrage if enabled and planned
-                if self.enable_solar_arbitrage and timestamp in solar_plan:
+                # Execute plan for this timestamp if it exists
+                if timestamp in solar_plan:
                     action = solar_plan[timestamp]
                     
                     if action['type'] == 'charge' and net_energy > 0:
                         # Store excess solar in battery
                         available_solar = net_energy
-                        space_in_battery = (max_battery_level - current_battery_level) / self.charge_efficiency
+                        space_in_battery = max_battery_level - current_battery_level
                         
-                        # Be more aggressive with solar charging - use higher of planned amount and max_power_per_interval
-                        max_charging_rate = max(action['amount'], max_power_per_interval)
-                        
-                        # Apply charge tapering when battery is above 80% - reduces charge rate as battery fills
-                        battery_percentage = current_battery_level / max_battery_level
-                        if battery_percentage > 0.8:
-                            # Linear taper from 100% charge rate at 80% SOC to 20% charge rate at 100% SOC
-                            taper_factor = 1.0 - ((battery_percentage - 0.8) / 0.2) * 0.8
-                            max_charging_rate *= taper_factor
-                            charge_limited_by = "taper"
-                        
-                        # Final charge amount is limited by available solar, charging rate, and space in battery
-                        charge_amount = min(available_solar, max_charging_rate, space_in_battery)
-                        
-                        # Debug info for tracking why some solar might go to grid
-                        if charge_limited_by == "none" and charge_amount < available_solar:
-                            if space_in_battery < available_solar:
-                                charge_limited_by = "battery_space"
-                            elif max_charging_rate < available_solar:
-                                charge_limited_by = "charging_rate"
-                        
+                        # Calculate and apply charge
+                        charge_amount = min(available_solar, max_power_per_interval, space_in_battery)
                         if charge_amount > 0:
                             solar_to_battery = charge_amount
                             current_battery_level += charge_amount * self.charge_efficiency
-                            # Update battery composition - add solar energy
                             solar_energy_in_battery += charge_amount * self.charge_efficiency
-                            daily_metrics[date]['lost_revenue'] += charge_amount * current_price
-                            actions.append('solar_to_battery')
                             
+                            # Track stored solar value
+                            daily_metrics[current_date]['stored_solar_value'] += charge_amount * current_price
+                            actions.append('solar_to_battery')
+                        
                         # Remaining solar goes to grid
                         solar_to_grid = available_solar - solar_to_battery
                         
                     elif action['type'] == 'discharge' and net_energy < 0:
-                        # Use battery to meet house demand
+                        # Use battery to meet house demand during high-price periods
                         energy_needed = abs(net_energy)
                         available_battery = (current_battery_level - min_battery_level) * self.discharge_efficiency
-                        discharge_amount = min(energy_needed, action['amount'], available_battery)
                         
+                        # Calculate and apply discharge
+                        discharge_amount = min(energy_needed, max_power_per_interval, available_battery)
                         if discharge_amount > 0:
                             battery_to_house = discharge_amount
                             
-                            # Calculate how much of this energy came from solar vs grid
-                            # based on current battery composition
-                            if current_battery_level > 0:
-                                solar_percentage = solar_energy_in_battery / current_battery_level
-                                grid_percentage = grid_energy_in_battery / current_battery_level
-                                
-                                # Update tracking for tax purposes
-                                solar_from_battery = discharge_amount * solar_percentage
-                                grid_from_battery = discharge_amount * grid_percentage
-                                
-                                solar_origin_to_house += solar_from_battery
-                                grid_origin_to_house += grid_from_battery
-                                
-                                # Reduce battery energy by source
-                                raw_discharge = discharge_amount / self.discharge_efficiency
-                                solar_energy_in_battery -= raw_discharge * solar_percentage
-                                grid_energy_in_battery -= raw_discharge * grid_percentage
-                            else:
-                                # Shouldn't happen but just in case
-                                grid_origin_to_house += discharge_amount
-                                
-                            current_battery_level -= discharge_amount / self.discharge_efficiency
-                            daily_metrics[date]['gross_savings'] += discharge_amount * current_price
-                            actions.append('battery_to_house')
+                            # Calculate proportion from solar vs grid
+                            solar_percentage = solar_energy_in_battery / current_battery_level if current_battery_level > 0 else 0
                             
-                        # Remaining deficit from grid
-                        grid_to_house = energy_needed - battery_to_house
-                        grid_origin_to_house += grid_to_house  # Direct grid usage for tax
-                    
-                else:
-                    # No solar arbitrage - default behavior
-                    if net_energy > 0:
-                        solar_to_grid = net_energy
-                        solar_origin_to_house = 0
-                    else:
-                        grid_to_house = abs(net_energy)
-                        grid_origin_to_house = grid_to_house  # Direct grid usage for tax
+                            # Update battery level and composition
+                            actual_discharge = discharge_amount / self.discharge_efficiency
+                            current_battery_level -= actual_discharge
+                            
+                            # Reduce solar and grid energy proportionally
+                            solar_from_battery = actual_discharge * solar_percentage
+                            grid_from_battery = actual_discharge - solar_from_battery
+                            
+                            solar_energy_in_battery = max(0, solar_energy_in_battery - solar_from_battery)
+                            grid_energy_in_battery = max(0, grid_energy_in_battery - grid_from_battery)
+                            
+                            # Calculate savings from using battery instead of grid
+                            date_for_metrics = pd.to_datetime(timestamp).date()
+                            daily_metrics[date_for_metrics]['gross_savings'] += battery_to_house * current_price
+                            
+                            # Track solar energy used from battery
+                            if solar_percentage > 0:
+                                solar_energy_used = battery_to_house * solar_percentage
+                                daily_metrics[date_for_metrics]['solar_energy_used'] += solar_energy_used
+                            
+                            actions.append('battery_to_house')
                 
-                # Record this transaction with enhanced source tracking
-                transaction_data = {
+                # If no plan for this timestamp, excess solar goes to grid
+                elif net_energy > 0:
+                    solar_to_grid = net_energy
+                
+                # Record energy flows for this timestamp
+                energy_flows.append({
                     'timestamp': timestamp,
-                    'date': date,
-                    'price': current_price,
-                    'solar_return': solar_return,
-                    'house_consumption': house_consumption,
-                    'net_energy': net_energy,
-                    'solar_to_battery': solar_to_battery,
+                    'solar_to_house': solar_to_house,
                     'solar_to_grid': solar_to_grid,
+                    'solar_to_battery': solar_to_battery,
+                    'grid_to_house': grid_to_house,
                     'grid_to_battery': grid_to_battery,
                     'battery_to_house': battery_to_house,
-                    'battery_to_grid': battery_to_grid,
-                    'grid_to_house': grid_to_house,
                     'battery_level': current_battery_level,
-                    'solar_energy_in_battery': solar_energy_in_battery,
-                    'grid_energy_in_battery': grid_energy_in_battery,
-                    'solar_origin_to_house': solar_origin_to_house,
-                    'grid_origin_to_house': grid_origin_to_house,
-                    'actions': '+'.join(actions) if actions else 'none',
-                    'charge_limited_by': charge_limited_by
-                }
-                
-                # Add charge rate info from daily metrics
-                if 'charge_rate_info' in daily_metrics[date]:
-                    transaction_data['charge_rate_info'] = daily_metrics[date]['charge_rate_info']
-                
-                self.transactions.append(transaction_data)
-        
-        # Convert daily metrics to results format
-        results = []
-        for date, metrics in daily_metrics.items():
-            if metrics['gross_savings'] > 0 or metrics['lost_revenue'] > 0:
-                results.append({
-                    'timestamp': date,
-                    'gross_savings': metrics['gross_savings'],
-                    'lost_revenue': metrics['lost_revenue'],
-                    'net_savings': metrics['gross_savings'] - metrics['lost_revenue'],
-                    'grid_arbitrage_savings': 0  # Keep the column but set to zero
+                    'price': current_price,
+                    'actions': ','.join(actions) if actions else 'none'
                 })
         
-        # Convert transactions to DataFrame for energy flow tracking
-        energy_flows_df = pd.DataFrame(self.transactions)
+        # Calculate final metrics and build result DataFrames
+        for date, metrics in daily_metrics.items():
+            # Calculate lost revenue (stored solar that wasn't used)
+            stored_value = metrics.get('stored_solar_value', 0)
+            avg_price = energy_pivot[energy_pivot['date'] == date]['price'].mean()
+            used_value = metrics.get('solar_energy_used', 0) * avg_price
+            metrics['lost_revenue'] = max(0, stored_value - used_value)
+            
+            # Calculate net savings
+            metrics['net_savings'] = metrics['gross_savings'] - metrics['lost_revenue'] 
+            
+            # Add to total savings DataFrame
+            total_savings = pd.concat([
+                total_savings,
+                pd.DataFrame({
+                    'timestamp': [pd.to_datetime(date)],
+                    'gross_savings': [metrics['gross_savings']],
+                    'lost_revenue': [metrics['lost_revenue']],
+                    'net_savings': [metrics['net_savings']],
+                })
+            ], ignore_index=True)
         
-        # Convert results to DataFrame
-        if results:
-            total_savings = pd.DataFrame(results)
-            total_savings['timestamp'] = pd.to_datetime(total_savings['timestamp'])
-            total_savings = total_savings.sort_values('timestamp')
+        # Create energy flows DataFrame
+        energy_flows_df = pd.DataFrame(energy_flows)
+
+        total_savings.to_csv("savings.csv")
         
         return {
             'savings': total_savings,
             'energy_flows': energy_flows_df
         }
-    
-    def _determine_interval_minutes(self, data):
-        """Determine the time interval between data points in minutes."""
-        if len(data) < 2:
-            return 60  # Default to 1 hour if not enough data
-        
-        # Calculate the most common time difference
-        timestamps = data['timestamp'].sort_values()
-        time_diffs = timestamps.diff().dropna()
-        
-        if len(time_diffs) == 0:
-            return 60
-        
-        # Convert to minutes and find most common
-        minutes_diffs = time_diffs.dt.total_seconds() / 60
-        most_common_diff = minutes_diffs.mode()[0]
-        
-        return most_common_diff
-    
-    def _plan_solar_arbitrage(self, day_data, max_power_per_interval):
+
+    def _plan_solar_arbitrage(self, day_data, max_power_per_interval, initial_energy_available=0, next_day_data=None):
         """
-        Plan solar arbitrage strategy for the day.
-        Decide when to store excess solar and when to use stored energy.
+        Plan optimal solar arbitrage strategy for the day.
         
-        Returns a dict of {timestamp: {'type': 'charge'/'discharge', 'amount': value}}
+        Creates a charging/discharging plan to maximize savings by:
+        1. Storing excess solar energy during generation periods
+        2. Discharging stored energy during high-price periods
+        
+        Args:
+            day_data: DataFrame with timestamp, price, return (solar generation), and supply (consumption)
+            max_power_per_interval: Maximum power that can be charged/discharged per interval
+            initial_energy_available: Energy already available in battery at start of day (kWh)
+            next_day_data: Optional data for next day (for overnight planning)
+            
+        Returns:
+            Dictionary mapping timestamps to charge/discharge actions
         """
         solar_plan = {}
         
-        # Calculate daily price stats to make smarter decisions
-        prices = day_data['price'].values
-        avg_price = day_data['price'].mean()
-        median_price = day_data['price'].median()
-        price_std = day_data['price'].std()
-        max_price = day_data['price'].max()
-        min_price = day_data['price'].min()
-        
-        # Price thresholds for charging and discharging
-        # More aggressive thresholds than before
-        # Account for efficiency losses in thresholds
-        required_price_increase = 1 / self.combined_efficiency
-        
-        # Define charge threshold 
-        charge_threshold = min(
-            avg_price,  # Below average price
-            avg_price - 0.5 * price_std  # Or below average minus half std deviation
-        )
-        
-        # Define discharge threshold
-        discharge_threshold = max(
-            avg_price * required_price_increase,  # Above efficiency-adjusted average
-            avg_price + 0.5 * price_std,  # Or above average plus half std deviation
-            charge_threshold * required_price_increase * self.price_threshold_factor  # Or minimum profitable threshold
-        )
-        
-        # Analyze each timestamp to plan solar arbitrage
+        # First pass: identify all excess solar periods for charging
+        charging_periods = []
         for idx, row in day_data.iterrows():
             timestamp = row['timestamp']
-            current_price = row['price']
             solar_return = row['return']
             house_consumption = row['supply']
             net_energy = solar_return - house_consumption
             
             if net_energy > 0:
-                # Always store excess solar energy in battery when available, regardless of price
-                # This prioritizes self-consumption of solar over grid return
-                solar_plan[timestamp] = {
-                    'type': 'charge',
-                    'amount': min(net_energy, max_power_per_interval),
-                    'price': current_price
-                }
-            elif net_energy < 0 and current_price > discharge_threshold:
-                # Energy deficit during high-price period - discharge battery
+                # Store excess solar production
+                charge_amount = min(net_energy, max_power_per_interval)
+                charging_periods.append({
+                    'timestamp': timestamp,
+                    'amount': charge_amount,
+                    'price': row['price'],
+                    'index': idx
+                })
+        
+        # Second pass: identify all energy deficit periods for potential discharge
+        discharge_candidates = []
+        for idx, row in day_data.iterrows():
+            timestamp = row['timestamp']
+            solar_return = row['return']
+            house_consumption = row['supply']
+            net_energy = solar_return - house_consumption
+            
+            if net_energy < 0:
+                discharge_candidates.append({
+                    'timestamp': timestamp,
+                    'deficit': abs(net_energy),
+                    'price': row['price'],
+                    'index': idx
+                })
+        
+        # Add next morning periods to discharge candidates if available
+        if next_day_data is not None:
+            morning_cutoff = pd.Timestamp(next_day_data['date'].iloc[0]).replace(hour=10)
+            next_day_morning = next_day_data[next_day_data['timestamp'] < morning_cutoff]
+            
+            for idx, row in next_day_morning.iterrows():
+                timestamp = row['timestamp']
+                solar_return = row['return']
+                house_consumption = row['supply']
+                net_energy = solar_return - house_consumption
+                
+                if net_energy < 0:
+                    discharge_candidates.append({
+                        'timestamp': timestamp,
+                        'deficit': abs(net_energy),
+                        'price': row['price'],
+                        'index': idx + 1000  # Offset to ensure these come after current day
+                    })
+        
+        # Sort charging periods chronologically
+        charging_periods.sort(key=lambda x: x['index'])
+        
+        # Calculate total energy available after all charging
+        energy_stored = initial_energy_available
+        for period in charging_periods:
+            timestamp = period['timestamp']
+            charge_amount = period['amount']
+            
+            solar_plan[timestamp] = {
+                'type': 'charge',
+                'amount': charge_amount,
+                'price': period['price']
+            }
+            
+            energy_stored += charge_amount * self.charge_efficiency
+        
+        # Prioritize discharge during highest-price periods
+        discharge_candidates.sort(key=lambda x: x['price'], reverse=True)
+        energy_available = energy_stored
+        allocated_timestamps = []
+        
+        # Allocate energy to highest-price periods first
+        for period in discharge_candidates:
+            timestamp = period['timestamp']
+            deficit = period['deficit']
+            price = period['price']
+            idx = period['index']
+            
+            # Skip periods before any charging if no initial energy is available
+            if (len(charging_periods) == 0 or idx <= charging_periods[0]['index']) and initial_energy_available <= 0:
+                continue
+                
+            discharge_amount = min(
+                deficit, 
+                max_power_per_interval,
+                energy_available / self.discharge_efficiency
+            )
+            
+            if discharge_amount > 0:
                 solar_plan[timestamp] = {
                     'type': 'discharge',
-                    'amount': min(abs(net_energy), max_power_per_interval),
-                    'price': current_price
+                    'amount': discharge_amount,
+                    'price': price
                 }
+                
+                energy_available -= discharge_amount / self.discharge_efficiency
+                allocated_timestamps.append(timestamp)
+        
+        # If energy remains, perform a chronological pass to allocate remaining energy
+        if energy_available > 0:
+            energy_accumulated = initial_energy_available
+            all_data = day_data.copy()
+            
+            if next_day_data is not None:
+                morning_cutoff = pd.Timestamp(next_day_data['date'].iloc[0]).replace(hour=10)
+                next_day_morning = next_day_data[next_day_data['timestamp'] < morning_cutoff]
+                all_data = pd.concat([all_data, next_day_morning])
+            
+            # Process timestamps chronologically
+            for _, row in sorted(all_data.iterrows(), key=lambda x: x[1]['timestamp']):
+                timestamp = row['timestamp']
+                net_energy = row['return'] - row['supply']
+                
+                # Update accumulated energy from charging events
+                if timestamp in solar_plan and solar_plan[timestamp]['type'] == 'charge':
+                    energy_accumulated += solar_plan[timestamp]['amount'] * self.charge_efficiency
+                
+                # If deficit period not already allocated and energy available, discharge
+                if (net_energy < 0 and 
+                    timestamp not in allocated_timestamps and 
+                    timestamp not in solar_plan and
+                    energy_accumulated > 0):
+                    
+                    discharge_amount = min(
+                        abs(net_energy),
+                        max_power_per_interval,
+                        energy_accumulated / self.discharge_efficiency
+                    )
+                    
+                    if discharge_amount > 0:
+                        solar_plan[timestamp] = {
+                            'type': 'discharge',
+                            'amount': discharge_amount,
+                            'price': row['price']
+                        }
+                        
+                        energy_accumulated -= discharge_amount / self.discharge_efficiency
         
         return solar_plan
-
-
-if __name__ == "__main__":
-    usage_df = get_kenter_data(
-                        "2024-02-25",
-                        "2024-02-27",
-                        interval='15min'
-                    )
-    price = get_energy_prices(
-                        "2024-02-25",
-                        "2024-02-27",
-    )
-    bm = BatterySavingsCalculator(battery_capacity=200.0)
-    bm.arbitrage(usage_df, price)
 
 

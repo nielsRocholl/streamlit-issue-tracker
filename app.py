@@ -9,6 +9,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 from streamlit_echarts import st_echarts
 import pandas as pd
+from utils.plotting import *
 
 # Set page configuration
 st.set_page_config(
@@ -26,97 +27,6 @@ authenticator = Authenticator(
     client_secret=st.secrets["CLIENT_SECRET"],
     redirect_uri= "http://localhost:8501" #"https://mango2mango.streamlit.app/" #"http://localhost:8501" #
 )
-
-def recalculate_savings(battery_capacity, enable_solar_arbitrage):
-    """Recalculate savings without fetching new data"""
-    if 'report_data' not in st.session_state:
-        return
-    
-    # Get cached data
-    usage_df = st.session_state.report_data['usage_df']
-    price_df = st.session_state.report_data['price_df']
-    tax_df = st.session_state.report_data['tax_df']
-    
-    # Apply settings from admin page if available
-    battery_params = {}
-    if 'battery_settings' in st.session_state:
-        settings = st.session_state['battery_settings']
-        battery_params = {
-            'charge_efficiency': settings.get('charge_efficiency', 0.95),
-            'discharge_efficiency': settings.get('discharge_efficiency', 0.95),
-            'min_state_of_charge': settings.get('min_state_of_charge', 0.1),
-            'price_threshold_factor': settings.get('price_threshold_factor', 1.05),
-            'max_cycle_fraction': settings.get('max_cycle_fraction', 1.0),
-            'maximum_charge_rate_kw': settings.get('maximum_charge_rate_kw', None)
-        }
-    
-    # Recalculate savings with the enhanced battery module
-    battery_calculator = BatterySavingsCalculator(
-        battery_capacity=battery_capacity,
-        enable_solar_arbitrage=enable_solar_arbitrage,
-        **battery_params
-    )
-    
-    battery_results = battery_calculator.arbitrage(usage_df, price_df)
-    savings = battery_results['savings']
-    energy_flows_df = battery_results['energy_flows']
-    
-    # Recalculate daily costs with proper tax application
-    daily_costs = calculate_daily_costs(
-        usage_df, 
-        price_df, 
-        tax_df,
-        energy_flows_df  # Pass energy flow data to properly apply tax only to grid energy
-    )
-    
-    # Update session state
-    st.session_state.report_data['savings'] = savings
-    st.session_state.report_data['energy_flows_df'] = energy_flows_df
-    st.session_state.report_data['daily_costs'] = daily_costs
-
-def determine_time_grouping(start_date, end_date):
-    """Determine appropriate time grouping based on date range"""
-    days_difference = (end_date - start_date).days
-    
-    if days_difference <= 30:  # Less than a month
-        return 'day', 'Daily'
-    elif days_difference <= 90:  # 1-3 months
-        return 'week', 'Weekly'
-    else:  # More than 3 months
-        return 'month', 'Monthly'
-
-def group_data_by_time(df, time_unit, date_column='date'):
-    """Group data by specified time unit (day, week, month)"""
-    if df is None or df.empty or date_column not in df.columns:
-        return df
-    
-    # Ensure date column is datetime
-    if not pd.api.types.is_datetime64_dtype(df[date_column]):
-        df[date_column] = pd.to_datetime(df[date_column])
-    
-    # Create a copy to avoid modifying the original
-    grouped_df = df.copy()
-    
-    if time_unit == 'day':
-        # Already daily, no grouping needed
-        return grouped_df
-    elif time_unit == 'week':
-        # Add week start date
-        grouped_df['period'] = grouped_df[date_column].dt.to_period('W').dt.start_time
-    elif time_unit == 'month':
-        # Add month start date
-        grouped_df['period'] = grouped_df[date_column].dt.to_period('M').dt.start_time
-    
-    # Group by the period
-    numeric_columns = grouped_df.select_dtypes(include=['number']).columns
-    
-    # Group and aggregate
-    result = grouped_df.groupby('period')[numeric_columns].sum().reset_index()
-    
-    # Rename period back to original date column
-    result.rename(columns={'period': date_column}, inplace=True)
-    
-    return result
 
 def main():
     # Initialize page state if not exists
@@ -138,6 +48,20 @@ def run_admin_page():
         st.session_state.current_page = "Battery Savings Analysis"
         st.rerun()
     
+    # Load existing settings if available
+    if 'battery_settings' in st.session_state:
+        settings = st.session_state['battery_settings']
+    else:
+        settings = {
+            'charge_efficiency': 1.0,
+            'discharge_efficiency': 1.0,
+            'min_state_of_charge': 0.0,
+            'max_cycle_fraction': 0.5,
+            'maximum_charge_rate_kw': None,
+            'battery_type': "Custom",
+            'battery_capacity': 100.0
+        }
+    
     with st.expander("Battery Technology Parameters", expanded=True):
         st.markdown("### Battery Efficiency and Technology")
         col1, col2 = st.columns(2)
@@ -146,36 +70,27 @@ def run_admin_page():
             charge_efficiency = st.slider(
                 "Charge Efficiency (%)", 
                 min_value=80, 
-                max_value=99, 
-                value=95, 
-                help="Percentage of energy retained during charging. Modern lithium-ion batteries are typically 94-96%."
+                max_value=100, 
+                value=int(settings.get('charge_efficiency', 1.0) * 100), 
+                help="Percentage of energy retained during charging. Set to 100% for optimal debugging."
             ) / 100
             
             discharge_efficiency = st.slider(
                 "Discharge Efficiency (%)", 
                 min_value=80, 
-                max_value=99, 
-                value=95, 
-                help="Percentage of stored energy that can be discharged. Modern lithium-ion batteries are typically 94-96%."
+                max_value=100, 
+                value=int(settings.get('discharge_efficiency', 1.0) * 100), 
+                help="Percentage of stored energy that can be discharged. Set to 100% for optimal debugging."
             ) / 100
         
         with col2:
             min_state_of_charge = st.slider(
                 "Minimum State of Charge (%)", 
-                min_value=5, 
+                min_value=0, 
                 max_value=30, 
-                value=10, 
-                help="Minimum battery level to maintain battery health."
+                value=int(settings.get('min_state_of_charge', 0.0) * 100), 
+                help="Minimum battery level to maintain. Set to 0% for optimal debugging to allow full battery utilization."
             ) / 100
-            
-            price_threshold_factor = st.slider(
-                "Price Threshold Factor", 
-                min_value=1.0, 
-                max_value=1.5, 
-                value=1.05, 
-                step=0.01, 
-                help="Factor to determine if storing energy is profitable. Lower values are more aggressive in energy storage."
-            )
     
     with st.expander("Charging and Power Parameters", expanded=True):
         st.markdown("### Power Limits and Charging Rates")
@@ -185,7 +100,7 @@ def run_admin_page():
             "Battery Capacity (kWh)", 
             min_value=10.0, 
             max_value=1000.0, 
-            value=100.0, 
+            value=settings.get('battery_capacity', 100.0), 
             step=10.0,
             help="Total energy storage capacity of the battery system"
         )
@@ -194,7 +109,8 @@ def run_admin_page():
             "Battery Installation Type",
             options=["Custom", "Small Residential (<50 kWh)", "Large Residential (50-100 kWh)", 
                     "Medium Commercial (100-250 kWh)", "Large Commercial/Farm (>250 kWh)"],
-            index=0,
+            index=["Custom", "Small Residential (<50 kWh)", "Large Residential (50-100 kWh)", 
+                   "Medium Commercial (100-250 kWh)", "Large Commercial/Farm (>250 kWh)"].index(settings.get('battery_type', "Custom")),
             help="Select a predefined battery type or choose custom to configure manually"
         )
         
@@ -226,20 +142,23 @@ def run_admin_page():
                 "Maximum C-Rate", 
                 min_value=0.1, 
                 max_value=2.0, 
-                value=default_c_rate, 
+                value=settings.get('max_cycle_fraction', 0.5), 
                 step=0.1, 
-                help="Maximum charge/discharge rate as a fraction of total capacity per hour (1C = full battery in 1 hour)."
+                help="Maximum charge/discharge rate as a fraction of total capacity per hour. Lower value (0.5) for more stable behavior during debugging."
             )
         
         with col2:
             if battery_type == "Custom":
-                use_custom_power = st.checkbox("Set Custom Maximum Power", value=False)
+                # Determine if we should check the custom power box
+                saved_max_power = settings.get('maximum_charge_rate_kw')
+                use_custom_power = st.checkbox("Set Custom Maximum Power", value=saved_max_power is not None)
+                
                 if use_custom_power:
                     max_power_kw = st.number_input(
                         "Maximum Charge Power (kW)", 
                         min_value=1.0, 
                         max_value=1000.0, 
-                        value=100.0, 
+                        value=saved_max_power if saved_max_power is not None else 100.0, 
                         step=1.0,
                         help="Maximum power for charging/discharging in kilowatts."
                     )
@@ -263,7 +182,6 @@ def run_admin_page():
             'charge_efficiency': charge_efficiency,
             'discharge_efficiency': discharge_efficiency,
             'min_state_of_charge': min_state_of_charge,
-            'price_threshold_factor': price_threshold_factor,
             'max_cycle_fraction': max_cycle_fraction,
             'maximum_charge_rate_kw': max_power_kw,
             'battery_type': battery_type,
@@ -393,10 +311,13 @@ def run_main_app():
                     
                 # If any settings change and we have data, recalculate
                 if 'report_data' in st.session_state:
-                    current_settings = (
-                        battery_capacity,
-                        enable_solar_arbitrage
-                    )
+                    # Create a settings tuple that includes all relevant settings
+                    current_settings = {
+                        'battery_capacity': battery_capacity,
+                        'enable_solar_arbitrage': enable_solar_arbitrage,
+                        'battery_settings_id': id(st.session_state.get('battery_settings', {}))
+                    }
+                    
                     if 'last_settings' not in st.session_state:
                         st.session_state.last_settings = current_settings
                     
@@ -499,10 +420,23 @@ def run_main_app():
                             else:
                                 battery_capacity = 100.0
                         
+                        # Get battery parameters from settings if available
+                        battery_params = {}
+                        if 'battery_settings' in st.session_state:
+                            settings = st.session_state['battery_settings']
+                            battery_params = {
+                                'charge_efficiency': settings.get('charge_efficiency', 1.0),
+                                'discharge_efficiency': settings.get('discharge_efficiency', 1.0),
+                                'min_state_of_charge': settings.get('min_state_of_charge', 0.0),
+                                'max_cycle_fraction': settings.get('max_cycle_fraction', 0.5),
+                                'maximum_charge_rate_kw': settings.get('maximum_charge_rate_kw', None)
+                            }
+                        
                         # Calculate potential battery savings
                         battery_calculator = BatterySavingsCalculator(
                             battery_capacity=battery_capacity,
                             enable_solar_arbitrage=enable_solar_arbitrage,
+                            **battery_params
                         )
                         
                         # The arbitrage function now returns a dict with both savings and energy_flows
@@ -835,6 +769,14 @@ def run_main_app():
                 # Create and display the battery level plot
                 battery_level_fig = create_battery_level_plot(energy_flows_df, battery_capacity)
                 st.plotly_chart(battery_level_fig, use_container_width=True)
+                
+                # Add the battery discharge savings plot
+                st.markdown("#### Battery Discharge Savings")
+                st.markdown("This chart shows when energy is discharged from the battery and the associated cost savings based on current energy prices.")
+                
+                # Create and display the battery discharge savings plot
+                battery_discharge_fig = create_battery_discharge_savings_plot(energy_flows_df)
+                st.plotly_chart(battery_discharge_fig, use_container_width=True)
             
             # Tab 3: Battery ROI (moved up)
             with report_tabs[2]:
