@@ -3,13 +3,15 @@ from modules.kenter_module import get_kenter_data
 from modules.entsoe_module import get_energy_prices
 from modules.battery_module import BatterySavingsCalculator
 from modules.tax_module import NetworkTaxCalculator
+from components.admin_module import run_admin_page
 from utils.utils import *
 from auth.authenticator import Authenticator
 from datetime import datetime
-import plotly.graph_objects as go
 from streamlit_echarts import st_echarts
 import pandas as pd
 from utils.plotting import *
+
+
 
 # Set page configuration
 st.set_page_config(
@@ -18,6 +20,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Add custom CSS to fix chart visibility in tabs
+streamlit_style = """
+    <style>
+    iframe[title="streamlit_echarts.st_echarts"]{ height: 1000px;} 
+    </style>
+    """
+st.markdown(streamlit_style, unsafe_allow_html=True)
 
 # Initialize the Authenticator
 allowed_users = st.secrets["ALLOWED_USERS"].split(",")
@@ -38,156 +48,6 @@ def main():
         run_main_app()
     elif st.session_state.current_page == "Admin Settings":
         run_admin_page()
-
-def run_admin_page():
-    st.title("Admin Settings")
-    st.markdown("Configure battery model parameters for different types of installations.")
-    
-    # Add a back button at the top
-    if st.button("← Back to Analysis", type="secondary"):
-        st.session_state.current_page = "Battery Savings Analysis"
-        st.rerun()
-    
-    # Load existing settings if available
-    if 'battery_settings' in st.session_state:
-        settings = st.session_state['battery_settings']
-    else:
-        settings = {
-            'charge_efficiency': 1.0,
-            'discharge_efficiency': 1.0,
-            'min_state_of_charge': 0.0,
-            'max_cycle_fraction': 0.5,
-            'maximum_charge_rate_kw': None,
-            'battery_type': "Custom",
-            'battery_capacity': 100.0
-        }
-    
-    with st.expander("Battery Technology Parameters", expanded=True):
-        st.markdown("### Battery Efficiency and Technology")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            charge_efficiency = st.slider(
-                "Charge Efficiency (%)", 
-                min_value=80, 
-                max_value=100, 
-                value=int(settings.get('charge_efficiency', 1.0) * 100), 
-                help="Percentage of energy retained during charging. Set to 100% for optimal debugging."
-            ) / 100
-            
-            discharge_efficiency = st.slider(
-                "Discharge Efficiency (%)", 
-                min_value=80, 
-                max_value=100, 
-                value=int(settings.get('discharge_efficiency', 1.0) * 100), 
-                help="Percentage of stored energy that can be discharged. Set to 100% for optimal debugging."
-            ) / 100
-        
-        with col2:
-            min_state_of_charge = st.slider(
-                "Minimum State of Charge (%)", 
-                min_value=0, 
-                max_value=30, 
-                value=int(settings.get('min_state_of_charge', 0.0) * 100), 
-                help="Minimum battery level to maintain. Set to 0% for optimal debugging to allow full battery utilization."
-            ) / 100
-    
-    with st.expander("Charging and Power Parameters", expanded=True):
-        st.markdown("### Power Limits and Charging Rates")
-        
-        # Add battery capacity selection at the top
-        battery_capacity = st.number_input(
-            "Battery Capacity (kWh)", 
-            min_value=10.0, 
-            max_value=1000.0, 
-            value=settings.get('battery_capacity', 100.0), 
-            step=10.0,
-            help="Total energy storage capacity of the battery system"
-        )
-        
-        battery_type = st.selectbox(
-            "Battery Installation Type",
-            options=["Custom", "Small Residential (<50 kWh)", "Large Residential (50-100 kWh)", 
-                    "Medium Commercial (100-250 kWh)", "Large Commercial/Farm (>250 kWh)"],
-            index=["Custom", "Small Residential (<50 kWh)", "Large Residential (50-100 kWh)", 
-                   "Medium Commercial (100-250 kWh)", "Large Commercial/Farm (>250 kWh)"].index(settings.get('battery_type', "Custom")),
-            help="Select a predefined battery type or choose custom to configure manually"
-        )
-        
-        # Set default values based on selection
-        if battery_type == "Small Residential (<50 kWh)":
-            default_c_rate = 0.5
-            default_max_power = 10.0
-            st.info("Small residential systems typically use up to 10 kW inverters with 0.5C rate")
-        elif battery_type == "Large Residential (50-100 kWh)":
-            default_c_rate = 0.7
-            default_max_power = 50.0
-            st.info("Large residential systems typically use up to 50 kW inverters with 0.7C rate")
-        elif battery_type == "Medium Commercial (100-250 kWh)":
-            default_c_rate = 0.8
-            default_max_power = 100.0
-            st.info("Medium commercial systems typically use up to 100 kW inverters with 0.8C rate")
-        elif battery_type == "Large Commercial/Farm (>250 kWh)":
-            default_c_rate = 0.9
-            default_max_power = 250.0
-            st.info("Large commercial systems typically use up to 250 kW inverters with 0.9C rate")
-        else:  # Custom
-            default_c_rate = 1.0
-            default_max_power = None
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            max_cycle_fraction = st.slider(
-                "Maximum C-Rate", 
-                min_value=0.1, 
-                max_value=2.0, 
-                value=settings.get('max_cycle_fraction', 0.5), 
-                step=0.1, 
-                help="Maximum charge/discharge rate as a fraction of total capacity per hour. Lower value (0.5) for more stable behavior during debugging."
-            )
-        
-        with col2:
-            if battery_type == "Custom":
-                # Determine if we should check the custom power box
-                saved_max_power = settings.get('maximum_charge_rate_kw')
-                use_custom_power = st.checkbox("Set Custom Maximum Power", value=saved_max_power is not None)
-                
-                if use_custom_power:
-                    max_power_kw = st.number_input(
-                        "Maximum Charge Power (kW)", 
-                        min_value=1.0, 
-                        max_value=1000.0, 
-                        value=saved_max_power if saved_max_power is not None else 100.0, 
-                        step=1.0,
-                        help="Maximum power for charging/discharging in kilowatts."
-                    )
-                else:
-                    st.info("Power will be automatically calculated based on battery capacity")
-                    max_power_kw = None
-            else:
-                st.number_input(
-                    "Maximum Charge Power (kW)",
-                    min_value=1.0,
-                    value=default_max_power,
-                    disabled=True,
-                    help="Predefined maximum power for this battery type"
-                )
-                max_power_kw = default_max_power
-    
-    # Save settings button
-    if st.button("Save Settings", type="primary"):
-        # Save the settings to session state
-        st.session_state['battery_settings'] = {
-            'charge_efficiency': charge_efficiency,
-            'discharge_efficiency': discharge_efficiency,
-            'min_state_of_charge': min_state_of_charge,
-            'max_cycle_fraction': max_cycle_fraction,
-            'maximum_charge_rate_kw': max_power_kw,
-            'battery_type': battery_type,
-            'battery_capacity': battery_capacity
-        }
-        st.success("Settings saved successfully! These will be applied to all future battery calculations.")
 
 def run_main_app():
     # Header with title in modern layout
@@ -257,6 +117,8 @@ def run_main_app():
                     # Display GTV in a consistent format
                     if conn_details.get('gtv'):
                         st.markdown(f"**Contracted Capacity:** {conn_details.get('gtv', 'N/A')} kW")
+                        # Store GTV in session state
+                        st.session_state.gtv = conn_details.get('gtv', 'N/A')
                 
                 st.markdown("---")
                 
@@ -323,7 +185,7 @@ def run_main_app():
                     
                     if current_settings != st.session_state.last_settings:
                         st.session_state.last_settings = current_settings
-                        recalculate_savings(battery_capacity, enable_solar_arbitrage)
+                        # recalculate_savings(battery_capacity, enable_solar_arbitrage)
                 
                 # Network operator in its own section
                 with st.expander("Network & Grid", expanded=True):
@@ -333,6 +195,8 @@ def run_main_app():
                         index=0,
                         help="Select the client's network operator for accurate tax calculations"
                     )
+                    # Store network operator in session state
+                    st.session_state.network_operator = network_operator
             else:
                 st.info("Please log in to access the analyzer")
                 
@@ -342,10 +206,6 @@ def run_main_app():
 
     # Main content area - Only visible for authenticated users
     if st.session_state.get("connected"):
-        # Welcome message with clear next steps
-        # st.markdown("### Welcome to the Battery Analysis Tool")
-        # st.info("Select a client connection and date range in the sidebar, then click 'Generate Report' to analyze potential battery savings.")
-        
         # Analysis Period section moved from sidebar to main content area
         st.markdown("## Analysis Period")
         
@@ -385,6 +245,17 @@ def run_main_app():
                 valid, error_message = validate_dates(start_date, end_date)
                 if not valid:
                     st.error(error_message)
+                    st.session_state.show_report = False
+                    return
+                
+                # Check if GTV and network operator are available in session state
+                if 'gtv' not in st.session_state:
+                    st.error("Contracted capacity (GTV) is not available. Please select a client connection with GTV information.")
+                    st.session_state.show_report = False
+                    return
+                
+                if 'network_operator' not in st.session_state:
+                    st.error("Network operator is not selected. Please select a network operator in the sidebar.")
                     st.session_state.show_report = False
                     return
                 
@@ -439,44 +310,29 @@ def run_main_app():
                             **battery_params
                         )
                         
+                        ### from here we neet to check ALL variables and do a cleanup ###
+                        #############################
+
                         # The arbitrage function now returns a dict with both savings and energy_flows
                         battery_results = battery_calculator.arbitrage(usage_df, price_df)
-                        savings = battery_results['savings']
-                        energy_flows_df = battery_results['energy_flows']
-                        
-                        # Calculate network tax
-                        tax_calculator = NetworkTaxCalculator()
-                        tax_df = tax_calculator.calculate_tax(
-                            usage_df,
-                            network_operator,
-                            gtv
-                        )
+
+                        missing_intervals = battery_results['missing_intervals']
+                        transaction_history_charge = battery_results['transaction_history_charge']
+                        transaction_history_discharge = battery_results['transaction_history_discharge']
+                        battery_history = battery_results['battery_history']
                         
                         # Calculate metrics including tax, now with energy source tracking
-                        daily_costs = calculate_daily_costs(
-                            usage_df, 
-                            price_df, 
-                            tax_df,
-                            energy_flows_df  # Pass energy flow data to properly apply tax only to grid energy
-                        )
-                        
-                        # Determine time grouping based on date range
-                        time_unit, time_label = determine_time_grouping(start_date, end_date)
-                        
+                        daily_costs = calculate_daily_costs(usage_df, price_df)
+                                                
                         # Store the data for recalculation without fetching again
                         st.session_state.report_data = {
-                            'usage_df': usage_df.copy(),
-                            'price_df': price_df.copy(),
-                            'tax_df': tax_df.copy(),
-                            'savings': savings.copy(),
-                            'energy_flows_df': energy_flows_df.copy(),
-                            'daily_costs': daily_costs.copy(),
-                            'start_date': start_date,
-                            'end_date': end_date,
-                            'connection_id': connection_id,
-                            'generated_at': datetime.now(),
-                            'time_unit': time_unit,
-                            'time_label': time_label
+                            'usage_df': usage_df,
+                            'price_df': price_df,
+                            'daily_costs': daily_costs,
+                            'transaction_history_discharge': transaction_history_discharge,
+                            'transaction_history_charge': transaction_history_charge,
+                            'battery_history': battery_history,
+                            'generated_at': datetime.now()
                         }
                         
                 except Exception as e:
@@ -497,29 +353,13 @@ def run_main_app():
             report_data = st.session_state.report_data
             usage_df = report_data['usage_df']
             price_df = report_data['price_df']
-            tax_df = report_data['tax_df']
-            energy_flows_df = report_data['energy_flows_df']
             daily_costs = report_data['daily_costs']
-            savings = report_data['savings']
-            time_unit = report_data.get('time_unit', 'day')
-            time_label = report_data.get('time_label', 'Daily')
-            
-            # Group data based on time unit if needed
-            if time_unit != 'day':
-                daily_costs = group_data_by_time(daily_costs, time_unit)
-                savings = group_data_by_time(savings, time_unit, date_column='timestamp')
+            transaction_history_discharge = report_data.get('transaction_history_discharge', pd.DataFrame())
+            transaction_history_charge = report_data.get('transaction_history_charge', pd.DataFrame())
+            battery_history = report_data.get('battery_history', pd.DataFrame())
             
             st.markdown("---")
             
-            # Summary metrics at the top for immediate insights
-            total_costs = daily_costs['cost'].sum()
-            total_tax = daily_costs['tax'].sum()
-            total_energy_cost = total_costs - total_tax
-            total_net_savings = savings['net_savings'].sum()
-            total_lost_revenue = savings['lost_revenue'].sum()
-            total_combined_savings = total_net_savings - total_lost_revenue
-            savings_percentage = (total_combined_savings / total_costs * 100) if total_costs > 0 else 0
-            final_cost = total_costs - total_combined_savings
             
             # Key metrics in a prominent row
             st.markdown("## Battery Impact Summary")
@@ -528,7 +368,7 @@ def run_main_app():
             with metric_col1:
                 st.metric(
                     "Current Energy Costs", 
-                    f"€{total_costs:.2f}", 
+                    f"€", 
                     delta=None,
                     help="Total energy costs without a battery system"
                 )
@@ -536,8 +376,8 @@ def run_main_app():
             with metric_col2:
                 st.metric(
                     "Potential Savings", 
-                    f"€{total_combined_savings:.2f}", 
-                    delta=f"{savings_percentage:.1f}%",
+                    f"€", 
+                    delta=f"%",
                     delta_color="normal",
                     help="Total savings with the selected battery configuration"
                 )
@@ -545,19 +385,12 @@ def run_main_app():
             with metric_col3:
                 st.metric(
                     "New Energy Costs", 
-                    f"€{final_cost:.2f}", 
-                    delta=f"-{savings_percentage:.1f}%",
+                    f"€", 
+                    delta=f"-%",
                     delta_color="inverse",
                     help="Total energy costs after implementing the battery system"
                 )
                 
-            with metric_col4:
-                monthly_savings = total_combined_savings / ((end_date - start_date).days / 30)
-                st.metric(
-                    "Monthly Savings", 
-                    f"€{monthly_savings:.2f}",
-                    help="Estimated monthly savings with the battery system"
-                )
             
             # Organize detailed content in tabs with new order
             report_tabs = st.tabs([
@@ -566,310 +399,63 @@ def run_main_app():
                 "Battery ROI",
                 "Energy Flow"
             ])
-            
+
+            echarts_options_tab1 = savings_bar_plot(daily_costs, transaction_history_discharge)
+            echarts_options_tab4 = price_flow_plot(usage_df, price_df)
             # Tab 1: Savings Analysis
             with report_tabs[0]:
-                st.markdown(f"### Battery Savings Potential ({time_label})")
+                st.markdown(f"### Battery Savings Potential ")
                 
                 # Display contextual information above the chart
                 explanation_col1, explanation_col2 = st.columns([3, 1])
                 with explanation_col1:
                     st.markdown(f"""
-                    This chart shows your client's **{time_label.lower()} energy costs** with and without a battery system:
+                    This chart shows your client's **{None} energy costs** with and without a battery system:
                     - The **coral bars** show current costs without a battery
                     - The **blue line** shows costs after battery savings
                     - The **teal trend line** shows the savings pattern over time
                     """)
                 
                 # Create the ECharts options - use the same function but with grouped data
-                echarts_options = create_echarts_cost_savings_plot(daily_costs, savings)
-                
-                # Display the chart with additional height for better visualization
-                try:
-                    st_echarts(options=echarts_options, height="500px", key="cost_savings_chart")
-                except Exception as e:
-                    st.error(f"Error displaying ECharts: {str(e)}")
+                st_echarts(options=echarts_options_tab1, height="500px", key="cost_savings_chart")
                     
-                    # Fallback to plotly
-                    st.info("Displaying fallback visualization...")
-                    
-                    # Create copies and ensure date formats match
-                    daily_costs_copy = daily_costs.copy()
-                    savings_copy = savings.copy()
-                    
-                    # Ensure date/timestamp columns are datetime type
-                    if 'date' in daily_costs_copy.columns:
-                        daily_costs_copy['date'] = pd.to_datetime(daily_costs_copy['date'])
-                    
-                    if 'timestamp' in savings_copy.columns:
-                        savings_copy['timestamp'] = pd.to_datetime(savings_copy['timestamp'])
-                        
-                        # Create a date column in savings to match daily_costs
-                        savings_copy['date'] = savings_copy['timestamp'].dt.date
-                        savings_copy['date'] = pd.to_datetime(savings_copy['date'])
-                    
-                    # Merge with compatible date columns
-                    merged_data = pd.merge(
-                        daily_costs_copy,
-                        savings_copy,
-                        on='date',  # Now both have compatible 'date' columns
-                        how='outer'
-                    )
-                    
-                    # Calculate final cost
-                    merged_data['final_cost'] = merged_data['cost'] - merged_data['net_savings']
-                    
-                    # Create a simple plotly bar chart
-                    fig = go.Figure()
-                    
-                    # Add original cost bars
-                    fig.add_trace(go.Bar(
-                        x=merged_data['date'],
-                        y=merged_data['cost'],
-                        name='Current Cost',
-                        marker_color='#FF6B6B'
-                    ))
-                    
-                    # Add final cost line
-                    fig.add_trace(go.Scatter(
-                        x=merged_data['date'],
-                        y=merged_data['final_cost'],
-                        name='Final Cost',
-                        line=dict(color='#4361EE', width=3)
-                    ))
-                    
-                    fig.update_layout(
-                        title=f"{time_label} Cost Comparison",
-                        xaxis_title="Date",
-                        yaxis_title="Cost (€)",
-                        legend_title="Legend",
-                        height=500,
-                        template="plotly_white"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-            
-                st.markdown(f"### {time_label} Savings Breakdown")
+                st.markdown(f"### {None} Savings Breakdown")
                 st.markdown(f"""
-                This chart shows how your client's savings are calculated ({time_label.lower()} aggregation):
+                This chart shows how your client's savings are calculated ({None} aggregation):
                 - **Solar Savings**: Money saved by using stored solar energy
                 - **Lost Solar Revenue**: Money not received from selling excess solar to the grid (because it was stored instead)
                 - **Net Savings**: Total savings after all factors are considered
                 """)
-                
-                # Create the savings breakdown chart with grouped data
-                breakdown_options = create_savings_breakdown_chart(savings)
-                
-                # Display the chart
-                try:
-                    st_echarts(options=breakdown_options, height="400px", key="savings_breakdown_chart")
-                except Exception as e:
-                    st.error(f"Error displaying savings breakdown chart: {str(e)}")
-            
-            # Tab 2: Detailed Metrics (moved up)
+
+            # Tab 2: Detailed Metrics
             with report_tabs[1]:
                 st.markdown("### Energy & Cost Details")
                 
-                # Two-column layout for metrics
-                detail_col1, detail_col2 = st.columns(2)
-                
-                with detail_col1:
-                    st.markdown("#### Current Cost Structure")
-                    # Create pie chart for cost breakdown
-                    fig = go.Figure()
-                    fig.add_trace(go.Pie(
-                        labels=['Energy Cost', 'Network Tax'],
-                        values=[total_energy_cost, total_tax],
-                        hole=0.6,
-                        marker_colors=['#1b6cbb', '#d97857'],
-                        textinfo='label+percent',
-                        hoverinfo='label+value+percent',
-                        hovertemplate='<b>%{label}</b><br>€%{value:.2f}<br>%{percent}'
-                    ))
-                    fig.update_layout(
-                        showlegend=False,
-                        height=300,
-                        margin=dict(t=0, b=0, l=0, r=0),
-                        annotations=[dict(text=f'€{total_costs:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                with detail_col2:
-                    st.markdown("#### Energy Metrics")
-                    
-                    # Calculate key metrics
-                    total_supply = usage_df[usage_df['type'] == 'supply']['value'].sum()
-                    total_return = usage_df[usage_df['type'] == 'return']['value'].sum()
-                    avg_price = price_df['price'].mean()
-                    
-                    # Calculate updated metrics from battery simulation if available
-                    simulated_solar_to_grid = 0
-                    if energy_flows_df is not None and not energy_flows_df.empty and 'solar_to_grid' in energy_flows_df.columns:
-                        simulated_solar_to_grid = energy_flows_df['solar_to_grid'].sum()
-                    
-                    # Display in a more organized format using metrics
-                    energy_col1, energy_col2 = st.columns(2)
-                    with energy_col1:
-                        st.metric("Grid Energy Used", f"{total_supply:.1f} kWh", help="Energy bought from the grid")
-                        st.metric("Average Price", f"€{avg_price:.3f}/kWh", help="Average price paid for grid energy")
-                    with energy_col2:
-                        # If we have battery simulation data, show both original and simulated return
-                        if energy_flows_df is not None and not energy_flows_df.empty:
-                            solar_return_delta = simulated_solar_to_grid - total_return
-                            
-                            # For very small return values (less than 0.1 kWh), show as 0
-                            display_value = simulated_solar_to_grid if simulated_solar_to_grid > 0.1 else 0
-                            
-                            # Only show delta if it's significant
-                            if abs(solar_return_delta) > 0.1:
-                                delta_display = f"{solar_return_delta:.1f} kWh"
-                                delta_color = "inverse" if solar_return_delta < 0 else "normal"
-                            else:
-                                delta_display = None
-                                delta_color = "normal"
-                                
-                            st.metric(
-                                "Solar Energy Returned", 
-                                f"{display_value:.1f} kWh", 
-                                delta=delta_display,
-                                delta_color=delta_color,
-                                help="Energy sold back to the grid. With battery simulation: some solar energy may be stored instead of returned to the grid."
-                            )
-                        else:
-                            st.metric("Solar Energy Returned", f"{total_return:.1f} kWh", help="Energy sold back to the grid")
-                        
-                        conn_details = meter_hierarchy[selected_conn_name]
-                        gtv = conn_details.get('gtv', 'N/A')
-                        st.metric("Contracted Capacity", f"{gtv} kW", help="Determines network costs & capacity")
-                
-                # Savings breakdown in a cleaner format
-                st.markdown("#### Savings Breakdown")
-                savings_col1, savings_col2 = st.columns(2)
-                
-                with savings_col1:
-                    st.metric(
-                        "Solar Storage Savings", 
-                        f"€{total_net_savings:.2f}", 
-                        help="Savings from storing solar energy"
-                    )
-                
-                with savings_col2:
-                    st.metric(
-                        "Lost Solar Revenue", 
-                        f"-€{total_lost_revenue:.2f}", 
-                        delta=f"-{(total_lost_revenue/total_costs*100):.1f}%" if total_costs > 0 else None,
-                        delta_color="inverse",
-                        help="Revenue lost by storing instead of selling"
-                    )
-                
-                # Add the battery level plot
-                st.markdown("#### Battery Level Over Time")
-                st.markdown("This chart shows how the battery charge level changes throughout the day, including the proportion of energy from solar vs. grid sources.")
-                
-                # Create and display the battery level plot
-                battery_level_fig = create_battery_level_plot(energy_flows_df, battery_capacity)
-                st.plotly_chart(battery_level_fig, use_container_width=True)
-                
-                # Add the battery discharge savings plot
-                st.markdown("#### Battery Discharge Savings")
-                st.markdown("This chart shows when energy is discharged from the battery and the associated cost savings based on current energy prices.")
-                
-                # Create and display the battery discharge savings plot
-                battery_discharge_fig = create_battery_discharge_savings_plot(energy_flows_df)
-                st.plotly_chart(battery_discharge_fig, use_container_width=True)
-            
-            # Tab 3: Battery ROI (moved up)
+            # Tab 3: Battery ROI
             with report_tabs[2]:
                 st.markdown("### Return on Investment")
-                
-                # Constants for ROI calculation
-                avg_battery_cost_per_kwh = 350  # € per kWh
-                estimated_installation_cost = 0  # €
-                estimated_battery_lifetime = 15  # years
-                
-                # Calculate ROI metrics
-                battery_cost = battery_capacity * avg_battery_cost_per_kwh + estimated_installation_cost
-                yearly_savings = monthly_savings * 12
-                payback_years = battery_cost / yearly_savings if yearly_savings > 0 else float('inf')
-                lifetime_savings = yearly_savings * estimated_battery_lifetime
-                roi_percentage = (lifetime_savings - battery_cost) / battery_cost * 100 if battery_cost > 0 else 0
-                
-                # Display ROI information
-                roi_col1, roi_col2 = st.columns(2)
-                
-                with roi_col1:
-                    st.markdown("#### Investment Overview")
-                    st.metric("Battery System Cost", f"€{battery_cost:,.2f}", help="Estimated cost for the battery system")
-                    st.metric("Yearly Savings", f"€{yearly_savings:,.2f}", help="Estimated yearly savings")
-                    st.metric("Payback Period", f"{payback_years:.1f} years", help="Time until the battery pays for itself")
-                
-                with roi_col2:
-                    st.markdown("#### Long-Term Benefits")
-                    st.metric("Battery Lifetime", f"{estimated_battery_lifetime} years", help="Estimated battery system lifetime")
-                    st.metric("Lifetime Savings", f"€{lifetime_savings:,.2f}", help="Total savings over battery lifetime")
-                    st.metric("Return on Investment", f"{roi_percentage:.1f}%", help="ROI percentage over battery lifetime")
-                
-                # Value proposition explanation in collapsible section
-                with st.expander("Value Proposition Details", expanded=True):
-                    st.markdown("""
-                    ### Key Benefits for Your Client
-                    
-                    #### Financial Benefits
-                    - **Reduced Energy Bills**: Save on monthly electricity expenses
-                    - **Protection from Price Spikes**: Buffer against volatile energy prices
-                    - **Tax Advantages**: Potential tax benefits for renewable energy investments
-                    
-                    #### System Benefits
-                    - **Energy Independence**: Less reliance on the grid
-                    - **Backup Power**: Critical systems can remain operational during outages
-                    - **Extended Solar Value**: Get more value from existing solar investment
-                    
-                    #### Environmental Benefits
-                    - **Reduced Carbon Footprint**: More effective use of clean solar energy
-                    - **Support Grid Stability**: Help balance the grid by reducing peak demand
-                    - **Future-Proof Investment**: Compatible with emerging energy management technologies
-                    """)
             
             # Tab 4: Energy Flow (moved to end)
             with report_tabs[3]:
                 st.markdown("### Energy Flow & Electricity Prices")
                 st.markdown("""
                 This chart shows the relationship between energy consumption, production, and electricity prices:
-                - **Blue bars**: Energy consumed from the grid
-                - **Green bars**: Solar energy returned to the grid
-                - **Orange line**: Electricity price variations throughout the day
+                - **Coral bars**: Energy consumed from the grid
+                - **Blue bars**: Solar energy returned to the grid
+                - **Teal line**: Electricity price variations throughout the period
                 """)
-                fig = create_plot(usage_df, price_df)
-                st.plotly_chart(fig, use_container_width=True)
-            
+                
+                st_echarts(options=echarts_options_tab4, height="500px", key="price_flow_chart")
+
             # Report footer with timestamp
             st.markdown("---")
-            st.caption(f"Report generated: {report_data['generated_at'].strftime('%Y-%m-%d %H:%M:%S')}")
                 
         elif not st.session_state.show_report:
             st.info("Select your client's connection and date range in the sidebar, then click 'Generate Report' to begin the analysis.")
     
     else:
         # Display demo message for users who haven't logged in
-        st.markdown("### Smart Battery Analysis Tool")
-        st.markdown("""
-        This tool helps you demonstrate the financial benefits of adding battery storage to your clients' solar systems.
-        
-        **Features:**
-        - Calculate potential cost savings
-        - Analyze solar storage efficiency
-        - Generate professional client reports
-        
-        Please log in using the button in the sidebar to access the full functionality.
-        """)
-
-    # Set up what future sections could include
-    st.markdown("### Future Reports")
-    st.write("""This analytics interface is built to expand with future functionality including:
-    - More detailed cost breakdowns and forecasts
-    - Battery degradation analysis and maintenance scheduling
-    - Integration with sustainability metrics and carbon reduction reporting
-    """)
+        st.markdown("")
 
 if __name__ == "__main__":
     main()

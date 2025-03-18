@@ -1,7 +1,8 @@
-from typing import Dict, Literal, Optional
+from typing import Literal
 import pandas as pd
 from datetime import time
 import holidays
+import streamlit as st
 
 class NetworkTaxCalculator:
     """Calculator for network operator specific energy taxes."""
@@ -83,45 +84,47 @@ class NetworkTaxCalculator:
             return "low"
     
     @staticmethod
-    def calculate_tax(
-        usage_df: pd.DataFrame,
-        operator: str,
-        gtv: float,
-        rate_schedule: Optional[Dict[pd.Timestamp, str]] = None
-    ) -> pd.DataFrame:
+    def get_tax_per_kwh(timestamp, operator: str = None, gtv: float = None) -> float:
         """
-        Calculate network tax for energy consumption.
+        Get the tax per kWh based on timestamp, operator, and GTV.
+        Uses Streamlit session state for operator and GTV if not provided.
         
         Args:
-            usage_df: DataFrame with columns [timestamp, type, value]
-            operator: Network operator name
-            gtv: Contracted capacity in kW
-            rate_schedule: Optional dict mapping timestamps to rate types ("normal" or "low")
-                         If None, determines rate types based on time of day rules
-        
+            timestamp: The timestamp to evaluate
+            operator: Network operator name (optional, will use session state if not provided)
+            gtv: Contracted capacity in kW (optional, will use session state if not provided)
+            
         Returns:
-            DataFrame with tax calculations
+            Tax rate in euros/kWh
+            
+        Raises:
+            ValueError: If operator or GTV cannot be determined from parameters or session state
         """
-        # Only calculate tax for energy drawn from grid (supply)
-        supply_df = usage_df[usage_df['type'] == 'supply'].copy()
+        # Get operator and GTV from session state if not provided
+        if operator is None:
+            if 'network_operator' in st.session_state:
+                operator = st.session_state.network_operator
+            else:
+                raise ValueError("Network operator not provided and not found in session state")
         
-        if rate_schedule is None:
-            # Determine rate type based on timestamp
-            supply_df['rate_type'] = supply_df['timestamp'].apply(
-                NetworkTaxCalculator.determine_rate_type
-            )
-        else:
-            # Assign rate type based on provided schedule
-            supply_df['rate_type'] = supply_df['timestamp'].map(
-                lambda x: rate_schedule.get(pd.Timestamp(x), 'normal')
-            )
+        if gtv is None:
+            if 'gtv' in st.session_state:
+                try:
+                    gtv = float(st.session_state.gtv)
+                except (ValueError, TypeError):
+                    raise ValueError("GTV in session state could not be converted to a number")
+            else:
+                raise ValueError("GTV not provided and not found in session state")
         
-        # Calculate tax for each row
-        supply_df['tax_rate'] = supply_df['rate_type'].apply(
-            lambda x: NetworkTaxCalculator.get_tax_rate(operator, gtv, x)
-        )
+        # Determine rate type based on timestamp
+        rate_type = NetworkTaxCalculator.determine_rate_type(timestamp)
         
-        # Convert tax rate from cents/kWh to euros/kWh
-        supply_df['tax_amount'] = supply_df['value'] * (supply_df['tax_rate'] / 100)
+        # Get tax rate in cents/kWh
+        tax_rate_cents = NetworkTaxCalculator.get_tax_rate(operator, gtv, rate_type)
         
-        return supply_df[['timestamp', 'value', 'rate_type', 'tax_rate', 'tax_amount']] 
+        # Convert to euros/kWh
+        tax_rate_euros = tax_rate_cents / 100
+        
+        return tax_rate_euros
+    
+    
