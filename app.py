@@ -2,14 +2,15 @@ import streamlit as st
 from modules.kenter_module import get_kenter_data
 from modules.entsoe_module import get_energy_prices
 from modules.battery_module import BatterySavingsCalculator
-from modules.tax_module import NetworkTaxCalculator
 from components.admin_module import run_admin_page
+from components.sidebar import run_sidebar
 from utils.utils import *
 from auth.authenticator import Authenticator
 from datetime import datetime
 from streamlit_echarts import st_echarts
 import pandas as pd
-from utils.plotting import *
+from utils.plotting.plotting import *
+from utils.calculations.calculations import *
 
 
 
@@ -51,7 +52,6 @@ def main():
 
 def run_main_app():
     # Header with title in modern layout
-    # Move account info to top right of main area
     header_col1, header_col2 = st.columns([3, 1])
     
     with header_col1:
@@ -81,128 +81,15 @@ def run_main_app():
             # Keep the header area clean when not logged in
             st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
 
-    # Sidebar configuration - cleaner and more organized
-    with st.sidebar:
-        # Create a container for the main sidebar content
-        sidebar_content = st.container()
-        
-        # Then render the main content
-        with sidebar_content:
-            if st.session_state.get("connected"):
-                # Client selection section with better spacing
-                st.markdown("## Client Data")
-                meter_hierarchy = get_meter_hierarchy()
-
-                # Connection selection with improved layout
-                connection_names = list(meter_hierarchy.keys())
-                selected_conn_name = st.selectbox(
-                    "Client Connection Point",
-                    options=connection_names,
-                    index=0,
-                    help="Select the client's facility connection point",
-                    on_change=clear_report_state
-                )
-
-                # Get connection details automatically
-                if selected_conn_name:
-                    conn_details = meter_hierarchy[selected_conn_name]
-                    connection_id = conn_details['connection_id']
-                    main_meter = conn_details['main_meter']
-                    
-                    # Clean up client data presentation with consistent styling
-                    st.markdown("#### Client Details")
-                    if conn_details.get('address') and conn_details.get('city'):
-                        st.markdown(f"**Location:** {conn_details['address']}, {conn_details['city']}")
-                    
-                    # Display GTV in a consistent format
-                    if conn_details.get('gtv'):
-                        st.markdown(f"**Contracted Capacity:** {conn_details.get('gtv', 'N/A')} kW")
-                        # Store GTV in session state
-                        st.session_state.gtv = conn_details.get('gtv', 'N/A')
-                
-                st.markdown("---")
-                
-                # Battery configuration
-                st.subheader("⚡ Battery Configuration")
-                
-                # Add admin button at the top of battery configuration
-                if st.session_state.get("connected"):
-                    if st.button("Configure Battery Settings", type="primary", use_container_width=True):
-                        st.session_state.current_page = "Admin Settings"
-                        st.rerun()
-                
-                # Use saved battery settings if available
-                if 'battery_settings' in st.session_state:
-                    settings = st.session_state['battery_settings']
-                    battery_type = settings.get('battery_type', 'Custom')
-                    battery_capacity = settings.get('battery_capacity', 100.0)
-                    st.info(f"Using custom settings from Admin page:\n- Battery type: {battery_type}\n- Capacity: {battery_capacity} kWh\n- C-rate: {settings.get('max_cycle_fraction', 1.0)}")
-                    
-                    # Add a button to view detailed settings
-                    if st.button("View Detailed Settings"):
-                        with st.expander("Battery Settings Details", expanded=True):
-                            st.write("**Efficiency Parameters:**")
-                            st.write(f"- Charge Efficiency: {settings.get('charge_efficiency', 0.95)*100:.1f}%")
-                            st.write(f"- Discharge Efficiency: {settings.get('discharge_efficiency', 0.95)*100:.1f}%")
-                            st.write(f"- Min State of Charge: {settings.get('min_state_of_charge', 0.1)*100:.1f}%")
-                            
-                            st.write("**Power Parameters:**")
-                            st.write(f"- Max C-rate: {settings.get('max_cycle_fraction', 1.0)}")
-                            max_power = settings.get('maximum_charge_rate_kw')
-                            if max_power is None:
-                                st.write("- Auto-calculated maximum power based on battery size")
-                            else:
-                                st.write(f"- Maximum Charge Power: {max_power} kW")
-                    
-                    # Add a button to reset to defaults
-                    if st.button("Reset to Default Settings"):
-                        if 'battery_settings' in st.session_state:
-                            del st.session_state['battery_settings']
-                        st.success("Reset to default settings. Page will refresh.")
-                        st.experimental_rerun()
-                else:
-                    st.info("Using default settings. Visit Admin Settings page to customize.")
-                    battery_capacity = 100.0  # Default battery capacity when no settings are available
-                
-                # Energy arbitrage options
-                enable_solar_arbitrage = st.toggle(
-                    "Solar Storage",
-                    value=True,
-                    help="Store excess solar energy to use during expensive periods"
-                )
-                    
-                # If any settings change and we have data, recalculate
-                if 'report_data' in st.session_state:
-                    # Create a settings tuple that includes all relevant settings
-                    current_settings = {
-                        'battery_capacity': battery_capacity,
-                        'enable_solar_arbitrage': enable_solar_arbitrage,
-                        'battery_settings_id': id(st.session_state.get('battery_settings', {}))
-                    }
-                    
-                    if 'last_settings' not in st.session_state:
-                        st.session_state.last_settings = current_settings
-                    
-                    if current_settings != st.session_state.last_settings:
-                        st.session_state.last_settings = current_settings
-                        # recalculate_savings(battery_capacity, enable_solar_arbitrage)
-                
-                # Network operator in its own section
-                with st.expander("Network & Grid", expanded=True):
-                    network_operator = st.selectbox(
-                        "Network Operator",
-                        options=NetworkTaxCalculator.NETWORK_OPERATORS,
-                        index=0,
-                        help="Select the client's network operator for accurate tax calculations"
-                    )
-                    # Store network operator in session state
-                    st.session_state.network_operator = network_operator
-            else:
-                st.info("Please log in to access the analyzer")
-                
-                # Add a big, visible login button in the sidebar
-                auth_url = authenticator.get_auth_url()
-                st.link_button("Login with Google", auth_url, type="primary", use_container_width=True)
+    # Call the sidebar component instead of having the sidebar code here
+    sidebar_data = run_sidebar(authenticator)
+    
+    # Extract values from sidebar data
+    selected_conn_name = sidebar_data['selected_conn_name']
+    connection_id = sidebar_data['connection_id']
+    main_meter = sidebar_data['main_meter']
+    battery_capacity = sidebar_data['battery_capacity']
+    enable_solar_arbitrage = sidebar_data['enable_solar_arbitrage']
 
     # Main content area - Only visible for authenticated users
     if st.session_state.get("connected"):
@@ -275,14 +162,6 @@ def run_main_app():
                             end_date.strftime('%Y-%m-%d')
                         )
                         
-                        # Get GTV for tax calculation
-                        gtv_str = conn_details.get('gtv', 'N/A')
-                        try:
-                            gtv = float(gtv_str)
-                        except (ValueError, TypeError):
-                            st.warning("Could not determine GTV for tax calculations. Using default high rate.")
-                            gtv = 0  # This will result in using the low_gtv (higher) tax rate
-                        
                         # Ensure battery_capacity has a value
                         if 'battery_capacity' not in locals() or battery_capacity is None:
                             # Use settings if available, otherwise use default
@@ -310,8 +189,6 @@ def run_main_app():
                             **battery_params
                         )
                         
-                        ### from here we neet to check ALL variables and do a cleanup ###
-                        #############################
 
                         # The arbitrage function now returns a dict with both savings and energy_flows
                         battery_results = battery_calculator.arbitrage(usage_df, price_df)
@@ -357,6 +234,8 @@ def run_main_app():
             transaction_history_discharge = report_data.get('transaction_history_discharge', pd.DataFrame())
             transaction_history_charge = report_data.get('transaction_history_charge', pd.DataFrame())
             battery_history = report_data.get('battery_history', pd.DataFrame())
+
+            cost_without_battery, cost_with_battery, dates = calculate_cost_with_and_without_battery(daily_costs, transaction_history_discharge)
             
             st.markdown("---")
             
@@ -368,29 +247,32 @@ def run_main_app():
             with metric_col1:
                 st.metric(
                     "Current Energy Costs", 
-                    f"€", 
-                    delta=None,
+                    f"€{np.sum(cost_without_battery):.2f}".replace('.', ','), 
                     help="Total energy costs without a battery system"
                 )
             
             with metric_col2:
                 st.metric(
                     "Potential Savings", 
-                    f"€", 
-                    delta=f"%",
-                    delta_color="normal",
+                    f"€{(np.sum(cost_without_battery) - np.sum(cost_with_battery)):.2f}".replace('.', ','), 
                     help="Total savings with the selected battery configuration"
                 )
             
             with metric_col3:
                 st.metric(
                     "New Energy Costs", 
-                    f"€", 
-                    delta=f"-%",
-                    delta_color="inverse",
+                    f"€{np.sum(cost_with_battery):.2f}".replace('.', ','), 
                     help="Total energy costs after implementing the battery system"
                 )
                 
+            with metric_col4:
+                savings_percentage = (np.sum(cost_without_battery) - np.sum(cost_with_battery)) / np.sum(cost_without_battery) * 100
+                st.metric(
+                    "Percentage Saved", 
+                    f"{savings_percentage:.1f}%".replace('.', ','),
+                    delta_color="inverse",
+                    help="Percentage of energy costs saved with the battery system"
+                )
             
             # Organize detailed content in tabs with new order
             report_tabs = st.tabs([
@@ -400,7 +282,7 @@ def run_main_app():
                 "Energy Flow"
             ])
 
-            echarts_options_tab1 = savings_bar_plot(daily_costs, transaction_history_discharge)
+            echarts_options_tab1 = savings_bar_plot(cost_without_battery, cost_with_battery, dates)
             echarts_options_tab4 = price_flow_plot(usage_df, price_df)
             # Tab 1: Savings Analysis
             with report_tabs[0]:
@@ -411,9 +293,8 @@ def run_main_app():
                 with explanation_col1:
                     st.markdown(f"""
                     This chart shows your client's **{None} energy costs** with and without a battery system:
-                    - The **coral bars** show current costs without a battery
-                    - The **blue line** shows costs after battery savings
-                    - The **teal trend line** shows the savings pattern over time
+                    - The **red** show current costs without a battery
+                    - The **blue** shows costs after battery savings
                     """)
                 
                 # Create the ECharts options - use the same function but with grouped data

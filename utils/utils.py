@@ -23,7 +23,7 @@ def validate_dates(start_date, end_date):
 
 
 def calculate_daily_costs(usage_df, price_df):
-    """Calculate daily costs by multiplying usage with price."""
+    """Calculate daily costs by multiplying usage with price and adding the tax."""
     # Filter out 'return' type
     tax_calculator = NetworkTaxCalculator()
     usage = usage_df[usage_df['type'] != 'return'].copy()
@@ -95,101 +95,3 @@ def clear_report_state():
     st.session_state.show_report = False
     if 'report_data' in st.session_state:
         del st.session_state.report_data
-
-
-
-
-
-
-
-
-
-# def recalculate_savings(battery_capacity, enable_solar_arbitrage):
-#     """Recalculate savings without fetching new data"""
-#     if 'report_data' not in st.session_state:
-#         return
-    
-#     # Get cached data
-#     usage_df = st.session_state.report_data['usage_df']
-#     price_df = st.session_state.report_data['price_df']
-#     tax_df = st.session_state.report_data['tax_df']
-    
-#     # Apply settings from admin page if available
-#     battery_params = {}
-#     if 'battery_settings' in st.session_state:
-#         settings = st.session_state['battery_settings']
-#         battery_params = {
-#             'charge_efficiency': settings.get('charge_efficiency', 0.95),
-#             'discharge_efficiency': settings.get('discharge_efficiency', 0.95),
-#             'min_state_of_charge': settings.get('min_state_of_charge', 0.1),
-#             'max_cycle_fraction': settings.get('max_cycle_fraction', 1.0),
-#             'maximum_charge_rate_kw': settings.get('maximum_charge_rate_kw', None)
-#         }
-    
-#     # Recalculate savings with the enhanced battery module
-#     battery_calculator = BatterySavingsCalculator(
-#         battery_capacity=battery_capacity,
-#         enable_solar_arbitrage=enable_solar_arbitrage,
-#         **battery_params
-#     )
-    
-#     battery_results = battery_calculator.arbitrage(usage_df, price_df)
-#     savings = battery_results['savings']
-#     energy_flows_df = battery_results['energy_flows']
-    
-#     # Recalculate daily costs with proper tax application
-#     daily_costs = calculate_daily_costs(
-#         usage_df, 
-#         price_df, 
-#         tax_df,
-#         energy_flows_df  # Pass energy flow data to properly apply tax only to grid energy
-#     )
-    
-#     # Update session state
-#     st.session_state.report_data['savings'] = savings
-#     st.session_state.report_data['energy_flows_df'] = energy_flows_df
-#     st.session_state.report_data['daily_costs'] = daily_costs
-
-# def determine_time_grouping(start_date, end_date):
-#     """Determine appropriate time grouping based on date range"""
-#     days_difference = (end_date - start_date).days
-    
-#     if days_difference <= 30:  # Less than a month
-#         return 'day', 'Daily'
-#     elif days_difference <= 90:  # 1-3 months
-#         return 'week', 'Weekly'
-#     else:  # More than 3 months
-#         return 'month', 'Monthly'
-
-# def group_data_by_time(df, time_unit, date_column='date'):
-#     """Group data by specified time unit (day, week, month)"""
-#     if df is None or df.empty or date_column not in df.columns:
-#         return df
-    
-#     # Ensure date column is datetime
-#     if not pd.api.types.is_datetime64_dtype(df[date_column]):
-#         df[date_column] = pd.to_datetime(df[date_column])
-    
-#     # Create a copy to avoid modifying the original
-#     grouped_df = df.copy()
-    
-#     if time_unit == 'day':
-#         # Already daily, no grouping needed
-#         return grouped_df
-#     elif time_unit == 'week':
-#         # Add week start date
-#         grouped_df['period'] = grouped_df[date_column].dt.to_period('W').dt.start_time
-#     elif time_unit == 'month':
-#         # Add month start date
-#         grouped_df['period'] = grouped_df[date_column].dt.to_period('M').dt.start_time
-    
-#     # Group by the period
-#     numeric_columns = grouped_df.select_dtypes(include=['number']).columns
-    
-#     # Group and aggregate
-#     result = grouped_df.groupby('period')[numeric_columns].sum().reset_index()
-    
-#     # Rename period back to original date column
-#     result.rename(columns={'period': date_column}, inplace=True)
-    
-#     return result
