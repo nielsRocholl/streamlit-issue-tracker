@@ -196,6 +196,7 @@ def run_main_app():
                         missing_intervals = battery_results['missing_intervals']
                         transaction_history_charge = battery_results['transaction_history_charge']
                         transaction_history_discharge = battery_results['transaction_history_discharge']
+                        transaction_history_solar_export = battery_results['transaction_history_solar_export']
                         battery_history = battery_results['battery_history']
                         
                         # Calculate metrics including tax, now with energy source tracking
@@ -208,6 +209,7 @@ def run_main_app():
                             'daily_costs': daily_costs,
                             'transaction_history_discharge': transaction_history_discharge,
                             'transaction_history_charge': transaction_history_charge,
+                            'transaction_history_solar_export': transaction_history_solar_export,
                             'battery_history': battery_history,
                             'generated_at': datetime.now()
                         }
@@ -231,11 +233,13 @@ def run_main_app():
             usage_df = report_data['usage_df']
             price_df = report_data['price_df']
             daily_costs = report_data['daily_costs']
-            transaction_history_discharge = report_data.get('transaction_history_discharge', pd.DataFrame())
-            transaction_history_charge = report_data.get('transaction_history_charge', pd.DataFrame())
-            battery_history = report_data.get('battery_history', pd.DataFrame())
+            transaction_history_discharge = report_data['transaction_history_discharge']
+            transaction_history_charge = report_data['transaction_history_charge']
+            transaction_history_solar_export = report_data['transaction_history_solar_export']
+            battery_history = report_data['battery_history']
 
-            cost_without_battery, cost_with_battery, dates = calculate_cost_with_and_without_battery(daily_costs, transaction_history_discharge)
+            cost_without_battery, cost_with_battery, dates = calculate_cost_with_and_without_battery(daily_costs, transaction_history_discharge, transaction_history_charge, transaction_history_solar_export)
+
             
             st.markdown("---")
             

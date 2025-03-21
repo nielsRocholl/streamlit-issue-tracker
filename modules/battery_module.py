@@ -181,21 +181,30 @@ class BatterySavingsCalculator:
         # Group the data by day
         daily_data = self.group_by_days(df)
 
-        transaction_history_charge = []
-        transaction_history_discharge = []
+
+        transaction_history_charge = [] 
+        transaction_history_discharge = [] 
+        transaction_history_solar_export = []
 
         for _, day_df in daily_data.items():
             # first pass, charge the battery with excess solar
             for _, row in day_df[day_df['type'] == 'return'].iterrows():
-                if row['value'] > 0 and self.battery.percent < 100:
-                    result =self.battery.charge_battery(row['value'])
-                    transaction_history_charge.append({
+                if row['value'] > 0:
+                    transaction_history_solar_export.append({
                         'timestamp': row['timestamp'],
-                        'type': 'charge',
-                        'amount': result['amount_charged'],
-                        'price': row['price'],
-                        'cost': result['amount_charged'] * row['price']
+                        'type': 'solar_export',
+                        'revenue': row['value'] * row['price']
                     })
+
+                    if self.battery.percent < 100:
+                        result =self.battery.charge_battery(row['value'])
+                        transaction_history_charge.append({
+                            'timestamp': row['timestamp'],
+                            'type': 'charge',
+                            'amount': result['amount_charged'],
+                            'price': row['price'],
+                            'lost_revenue': result['amount_charged'] * row['price']
+                        })
             
             # second pass, discharge the battery during high-price periods
             sorted_day_df = day_df[day_df['type'] == 'supply'].sort_values('price', ascending=False)
@@ -213,6 +222,7 @@ class BatterySavingsCalculator:
             'missing_intervals': True if len(missing_price_intervals) > 0 else False,
             'transaction_history_charge': pd.DataFrame(transaction_history_charge),
             'transaction_history_discharge': pd.DataFrame(transaction_history_discharge),
+            'transaction_history_solar_export': pd.DataFrame(transaction_history_solar_export),
             'battery_history': self.battery.get_history_dataframe()
         }
 
