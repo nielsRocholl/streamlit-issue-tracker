@@ -10,7 +10,7 @@ class NetworkTaxCalculator:
     NETWORK_OPERATORS = ["Enexis"]  # Add more operators as needed
     
     # Tax rates per operator (in cents/kWh)
-    TAX_RATES = {
+    NETWORK_TAX_RATES = {
         "Enexis": {
             "low_gtv": {  # < 50 kW
                 "normal": 8.04,
@@ -36,13 +36,13 @@ class NetworkTaxCalculator:
         Returns:
             Tax rate in cents/kWh
         """
-        if operator not in NetworkTaxCalculator.TAX_RATES:
+        if operator not in NetworkTaxCalculator.NETWORK_TAX_RATES:
             raise ValueError(f"Unknown network operator: {operator}")
             
         # For now, only implement Enexis logic
         if operator == "Enexis":
             gtv_category = "low_gtv" if gtv < 50 else "high_gtv"
-            return NetworkTaxCalculator.TAX_RATES[operator][gtv_category][rate_type]
+            return NetworkTaxCalculator.NETWORK_TAX_RATES[operator][gtv_category][rate_type]
         
         return 0.0
     
@@ -128,3 +128,30 @@ class NetworkTaxCalculator:
         return tax_rate_euros
     
     
+class GovernmentTaxCalculator:
+
+    # Government tax rates by kWh usage brackets
+    GOVERNMENT_TAX_RATES = [
+        (0, 2900, 0.10154),         # 0-2900 kWh
+        (2901, 10000, 0.10154),      # 2901-10000 kWh
+        (10001, 50000, 0.06937),     # 10001-50000 kWh
+        (50001, 10000000, 0.03868),  # 50001-10000000 kWh
+        (10000001, float('inf'), 0.00321)  # >10000000 kWh
+    ]
+    
+    @staticmethod
+    def get_tax_rate(kwh_used):
+        """
+        Returns the appropriate tax rate based on kWh usage.
+        
+        Args:
+            kwh_used (float): The total kWh used
+            
+        Returns:
+            float: The applicable tax rate
+        """
+        for min_kwh, max_kwh, rate in GovernmentTaxCalculator.GOVERNMENT_TAX_RATES:
+            if min_kwh <= kwh_used <= max_kwh:
+                return rate
+        # This should never happen with properly defined ranges
+        raise ValueError(f"No tax rate found for kWh usage: {kwh_used}")

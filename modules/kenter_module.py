@@ -68,6 +68,29 @@ class KenterAPI:
         self._cache[cache_key] = data
         return data
     
+    @lru_cache(maxsize=128)
+    def _get_month_data(self, year: int, month: int) -> dict:
+        """Get energy data for specific month with caching."""
+        cache_key = f"{self._connection_id}_{self._metering_point}_{year}_{month:02d}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        if not self._token:
+            self._token = self._get_token()
+            
+        url = f"{self._base_url}/measurements/connections/{self._connection_id}/metering-points/{self._metering_point}/months/{year}/{month:02d}"
+        response = requests.get(url, headers={'Authorization': f'Bearer {self._token}'})
+        
+        # Handle token expiration
+        if response.status_code == 401:
+            self._token = self._get_token()
+            response = requests.get(url, headers={'Authorization': f'Bearer {self._token}'})
+            
+        response.raise_for_status()
+        data = response.json()
+        self._cache[cache_key] = data
+        return data
+    
     def get_meter_list(self) -> list:
         """Retrieve all available connections and metering points."""
         if not self._token:
@@ -131,15 +154,13 @@ def get_kenter_data(
     end_date: str, 
     connection_id: str,  # New parameter
     metering_point: str,  # New parameter
-    interval: Literal['15min', '1h'] = '15min'
 ) -> pd.DataFrame:
     """
-    Get Kenter energy data for supply and return.
+    Get Kenter energy data for supply and return on 15 minute intervals.
     
     Args:
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
-        interval: Time interval ('15min' or '1h', default: '15min')
         
     Returns:
         DataFrame with energy data at specified interval
@@ -147,9 +168,6 @@ def get_kenter_data(
     Raises:
         ValueError: If date range exceeds 1 year or invalid interval
     """
-    # Validate interval
-    if interval not in ['15min', '1h']:
-        raise ValueError("Interval must be '15min' or '1h'")
     
     # Convert dates
     tz = pytz.timezone('Europe/Amsterdam')
@@ -193,43 +211,27 @@ def get_kenter_data(
     # Create DataFrame efficiently
     df = pd.DataFrame(data)
     
-    if interval == '15min':
-        # Filter data to start from the specified start_date at 00:00
-        start_datetime = pd.Timestamp(start_date, tz='Europe/Amsterdam').replace(tzinfo=None)
-        df = df[df['timestamp'] >= start_datetime]
-        
-        # Optimize pivot operations
-        df = (df.groupby(['timestamp', 'type'])['value']
-              .mean()
-              .unstack(fill_value=0)
-              .reset_index())
-        
-        # Ensure all required columns exist
-        for col in ['supply', 'return']:
-            if col not in df.columns:
-                df[col] = 0
-                
-        # Melt back to long format efficiently
-        df = df.melt(
-            id_vars=['timestamp'],
-            value_vars=['supply', 'return'],
-            var_name='type',
-            value_name='value'
-        )
-        
-        return df.iloc[:-1]  # remove very last 00:00
-        
-    elif interval == '1h':
-        # Optimize hourly resampling
-        pivot_df = (df.pivot(index='timestamp', columns='type', values='value')
-                   .resample('1H')
-                   .sum()
-                   .reset_index())
-        
-        return (pivot_df.melt(
-            id_vars=['timestamp'],
-            value_vars=['supply', 'return'],
-            var_name='type',
-            value_name='value'
-        ).sort_values('timestamp')
-         .reset_index(drop=True))
+    # Filter data to start from the specified start_date at 00:00
+    start_datetime = pd.Timestamp(start_date, tz='Europe/Amsterdam').replace(tzinfo=None)
+    df = df[df['timestamp'] >= start_datetime]
+    
+    # Optimize pivot operations
+    df = (df.groupby(['timestamp', 'type'])['value']
+            .mean()
+            .unstack(fill_value=0)
+            .reset_index())
+    
+    # Ensure all required columns exist
+    for col in ['supply', 'return']:
+        if col not in df.columns:
+            df[col] = 0
+            
+    # Melt back to long format efficiently
+    df = df.melt(
+        id_vars=['timestamp'],
+        value_vars=['supply', 'return'],
+        var_name='type',
+        value_name='value'
+    )
+    
+    return df.iloc[:-1]  # remove very last 00:00

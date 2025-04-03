@@ -154,8 +154,8 @@ def run_main_app():
                             end_date.strftime('%Y-%m-%d'),
                             connection_id=connection_id,
                             metering_point=main_meter,
-                            interval='15min'
                         )
+                        calculate_covernment_tax(usage_df, connection_id, main_meter)
                         
                         price_df = get_energy_prices(
                             start_date.strftime('%Y-%m-%d'),
@@ -238,7 +238,7 @@ def run_main_app():
             transaction_history_solar_export = report_data['transaction_history_solar_export']
             battery_history = report_data['battery_history']
 
-            cost_without_battery, cost_with_battery, dates = calculate_cost_with_and_without_battery(daily_costs, transaction_history_discharge, transaction_history_charge, transaction_history_solar_export)
+            cost_without_battery, cost_with_battery, dates = calculate_cost_with_and_without_battery(daily_costs, transaction_history_discharge, transaction_history_charge, transaction_history_solar_export, usage_df, main_meter, connection_id)
 
             
             st.markdown("---")

@@ -151,16 +151,17 @@ if __name__ == "__main__":
     
     try:
         prices_df = get_energy_prices(start, end)
+        print(prices_df)
         
         # Save to CSV
         output_file = 'energy_prices_2024.csv'
-        prices_df.to_csv(output_file, index=False)
+        # prices_df.to_csv(output_file, index=False)
         
-        print(f"Data saved to {output_file}")
-        print(f"\nFirst few rows of data:")
-        print(prices_df.head())
-        print(f"\nLast few rows of data:")
-        print(prices_df.tail())
+        # print(f"Data saved to {output_file}")
+        # print(f"\nFirst few rows of data:")
+        # print(prices_df.head())
+        # print(f"\nLast few rows of data:")
+        # print(prices_df.tail())
         
     except Exception as e:
         print(f"Error: {str(e)}")
